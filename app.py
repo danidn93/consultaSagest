@@ -8,9 +8,10 @@ app = Flask(__name__)
 
 def consultar_saldo_unemi(cedula):
     session = requests.Session()
-    r1 = session.get("https://sagest.epunemi.gob.ec/consultarsaldos", headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    })
+    r1 = session.get(
+        "https://sagest.epunemi.gob.ec/consultarsaldos",
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    )
     
     soup = BeautifulSoup(r1.text, "html.parser")
     token_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
@@ -39,8 +40,12 @@ def consultar_saldo_unemi(cedula):
         "tipoiden": "1"
     }
     
-    r2 = session.post("https://sagest.epunemi.gob.ec/consultarsaldos",
-                      headers=headers, cookies=cookies, data=data)
+    r2 = session.post(
+        "https://sagest.epunemi.gob.ec/consultarsaldos",
+        headers=headers,
+        cookies=cookies,
+        data=data
+    )
     
     try:
         result_html = r2.json().get("data", "")
@@ -50,7 +55,7 @@ def consultar_saldo_unemi(cedula):
     soup = BeautifulSoup(result_html, "html.parser")
     
     # ────────────────────────────────────────────────
-    # 🧍 Extraer datos del estudiante (sin cambios)
+    # Datos del estudiante (sin cambios)
     # ────────────────────────────────────────────────
     datos_estudiante = {}
     card_body = soup.find("div", class_="card-body")
@@ -65,75 +70,51 @@ def consultar_saldo_unemi(cedula):
                 datos_estudiante["correo"] = text.split(":", 1)[-1].strip()
     
     # ────────────────────────────────────────────────
-    # 🧾 Extraer SOLO la tabla de RUBROS UNEMI (MAESTRIAS, EDUCACIÓN CONTINUA, ETC)
+    # Extraer SOLO la tabla de RUBROS UNEMI
     # ────────────────────────────────────────────────
     rubros = []
-
-    # Buscar el <th> que contenga el título deseado (dentro de cualquier texto descendiente)
-    th_titulo = soup.find('th', lambda tag: tag and 'RUBROS UNEMI' in tag.get_text(separator=' ', strip=True).upper())
-
+    
+    # Función filtro correcta para BeautifulSoup
+    def es_titulo_rubros_unemi(tag):
+        if not tag or tag.name != 'th':
+            return False
+        texto = tag.get_text(separator=" ", strip=True).upper()
+        return "RUBROS UNEMI" in texto
+    
+    # Buscar el th con el título
+    th_titulo = soup.find(es_titulo_rubros_unemi)
+    
+    tabla = None
+    
     if th_titulo:
-        # Subimos al card padre (el contenedor principal de esa sección)
-        card = th_titulo.find_parent('div', class_='card')
+        card = th_titulo.find_parent("div", class_="card")
         if card:
-            # Dentro del card, buscamos la tabla bordered/striped
-            tabla = card.find('table', class_='table-bordered')
-            if tabla:
-                # Extraemos filas del tbody (o directamente tr si no hay tbody)
-                filas = tabla.find('tbody')
-                if filas:
-                    filas = filas.find_all('tr')
-                else:
-                    filas = tabla.find_all('tr')
-
-                for fila in filas:
-                    celdas = fila.find_all('td')
-                    if len(celdas) < 7:  # mínimo para tener las columnas clave
-                        continue
-
-                    rubros.append({
-                        "codigo": celdas[0].get_text(strip=True),               # P[1601055] o similar
-                        "rubro": celdas[1].get_text(strip=True),
-                        "mes": celdas[2].get_text(strip=True),
-                        "fecha_vencimiento": celdas[3].get_text(strip=True),
-                        "valor_total": celdas[4].get_text(strip=True),
-                        "total_pagado": celdas[5].get_text(strip=True),
-                        "total_pendiente": celdas[6].get_text(strip=True),
-                        # Si quieres la factura link o algo, puedes extraer celdas[7] pero es más complejo (onclick)
-                    })
-
-    # Opcional: fallback si por alguna razón no encuentra el título (rara vez necesario)
-    if not rubros:
-        tablas = soup.find_all('table', class_='table-bordered')
+            tabla = card.find("table", class_="table-bordered")
+    
+    # Fallback: si no encontramos por título, tomamos la segunda tabla bordered
+    if not tabla:
+        tablas = soup.find_all("table", class_="table-bordered")
         if len(tablas) >= 2:
-            # Si la primera es Jornadas → toma la segunda
-            tabla = tablas[1]
-            
+            tabla = tablas[1]  # 0 = Jornadas, 1 = Rubros UNEMI (en la mayoría de casos)
+    
     if tabla:
-        # Tomamos todas las filas (con o sin tbody)
+        # Obtener filas (con o sin tbody)
         filas = tabla.select("tbody tr") or tabla.select("tr")
+        
         for fila in filas:
             celdas = fila.find_all("td")
-            if len(celdas) < 4:  # mínimo para tener sentido
+            if len(celdas) < 7:
                 continue
             
-            rubro_data = {
-                "rubro": celdas[1].get_text(strip=True) if len(celdas) > 1 else "",
-                "mes": celdas[2].get_text(strip=True) if len(celdas) > 2 else "",
-                "fecha_vencimiento": celdas[3].get_text(strip=True) if len(celdas) > 3 else "",
-            }
-            
-            # Columnas adicionales si existen (tu ejemplo tiene hasta 6-7)
-            if len(celdas) >= 7:
-                rubro_data.update({
-                    "valor_total": celdas[4].get_text(strip=True),
-                    "total_pagado": celdas[5].get_text(strip=True),
-                    "saldo": celdas[6].get_text(strip=True),
-                })
-            elif len(celdas) >= 5:
-                rubro_data["valor"] = celdas[4].get_text(strip=True)
-            
-            rubros.append(rubro_data)
+            rubros.append({
+                "codigo": celdas[0].get_text(strip=True),
+                "rubro": celdas[1].get_text(strip=True),
+                "mes": celdas[2].get_text(strip=True),
+                "fecha_vencimiento": celdas[3].get_text(strip=True),
+                "valor_total": celdas[4].get_text(strip=True),
+                "total_pagado": celdas[5].get_text(strip=True),
+                "total_pendiente": celdas[6].get_text(strip=True),
+            })
     
     return {
         "datos_estudiante": datos_estudiante,
