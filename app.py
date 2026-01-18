@@ -6,7 +6,7 @@ import os
 
 app = Flask(__name__)
 
-def consultar_saldo_unemi(cedula):
+def consultar_saldo_unemi(identificacion, tipoiden=1):
     session = requests.Session()
     r1 = session.get(
         "https://sagest.epunemi.gob.ec/consultarsaldos",
@@ -36,8 +36,8 @@ def consultar_saldo_unemi(cedula):
     data = {
         "action": "segmento",
         "csrfmiddlewaretoken": csrf_token_form,
-        "cedula": cedula,
-        "tipoiden": "1"
+        "cedula": identificacion,           # el campo siempre se llama "cedula" en el POST
+        "tipoiden": str(tipoiden)           # 1 = cédula, 2 = pasaporte (ajusta si son otros valores)
     }
     
     r2 = session.post(
@@ -55,33 +55,32 @@ def consultar_saldo_unemi(cedula):
     soup = BeautifulSoup(result_html, "html.parser")
     
     # ────────────────────────────────────────────────
-    # Datos del estudiante (sin cambios)
+    # Datos del estudiante
     # ────────────────────────────────────────────────
     datos_estudiante = {}
     card_body = soup.find("div", class_="card-body")
     if card_body:
         for p in card_body.find_all("p"):
             text = p.get_text(strip=True)
-            if "Cédula" in text:
-                datos_estudiante["cedula"] = text.split(":", 1)[-1].strip()
+            if "Cédula" in text or "Identificación" in text:
+                datos_estudiante["identificacion"] = text.split(":", 1)[-1].strip()
             elif "Nombres" in text:
                 datos_estudiante["nombres"] = text.split(":", 1)[-1].strip()
             elif "Email" in text:
                 datos_estudiante["correo"] = text.split(":", 1)[-1].strip()
     
     # ────────────────────────────────────────────────
-    # Extraer SOLO la tabla de RUBROS UNEMI
+    # Extraer SOLO tabla RUBROS UNEMI (maestrías, educación continua, etc.)
     # ────────────────────────────────────────────────
     rubros = []
     
-    # Función filtro correcta para BeautifulSoup
+    # Filtro correcto para encontrar el <th> con el título
     def es_titulo_rubros_unemi(tag):
         if not tag or tag.name != 'th':
             return False
         texto = tag.get_text(separator=" ", strip=True).upper()
         return "RUBROS UNEMI" in texto
     
-    # Buscar el th con el título
     th_titulo = soup.find(es_titulo_rubros_unemi)
     
     tabla = None
@@ -91,16 +90,14 @@ def consultar_saldo_unemi(cedula):
         if card:
             tabla = card.find("table", class_="table-bordered")
     
-    # Fallback: si no encontramos por título, tomamos la segunda tabla bordered
+    # Fallback: segunda tabla bordered si no se encontró por título
     if not tabla:
         tablas = soup.find_all("table", class_="table-bordered")
         if len(tablas) >= 2:
-            tabla = tablas[1]  # 0 = Jornadas, 1 = Rubros UNEMI (en la mayoría de casos)
+            tabla = tablas[1]
     
     if tabla:
-        # Obtener filas (con o sin tbody)
         filas = tabla.select("tbody tr") or tabla.select("tr")
-        
         for fila in filas:
             celdas = fila.find_all("td")
             if len(celdas) < 7:
@@ -124,11 +121,22 @@ def consultar_saldo_unemi(cedula):
 
 @app.route('/consultar', methods=['GET'])
 def consultar():
-    cedula = request.args.get('cedula')
-    if not cedula:
-        return jsonify({"error": "Parámetro 'cedula' es requerido"}), 400
+    # Acepta cedula o identificacion (para mayor flexibilidad)
+    identificacion = request.args.get('cedula') or request.args.get('identificacion')
+    tipoiden_str = request.args.get('tipo') or request.args.get('tipoiden', '1')
     
-    resultado = consultar_saldo_unemi(cedula)
+    if not identificacion:
+        return jsonify({"error": "Parámetro 'cedula' o 'identificacion' es requerido"}), 400
+    
+    try:
+        tipoiden = int(tipoiden_str)
+        if tipoiden not in [1, 2]:
+            return jsonify({"error": "tipoiden debe ser 1 (cédula) o 2 (pasaporte)"}), 400
+    except ValueError:
+        return jsonify({"error": "tipoiden debe ser un número (1 o 2)"}), 400
+    
+    resultado = consultar_saldo_unemi(identificacion, tipoiden)
+    
     return Response(
         json.dumps(resultado, ensure_ascii=False),
         content_type='application/json; charset=utf-8'
