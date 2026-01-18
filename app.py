@@ -65,31 +65,50 @@ def consultar_saldo_unemi(cedula):
                 datos_estudiante["correo"] = text.split(":", 1)[-1].strip()
     
     # ────────────────────────────────────────────────
-    # 🧾 Extraer SOLO la tabla de RUBROS UNEMI
+    # 🧾 Extraer SOLO la tabla de RUBROS UNEMI (MAESTRIAS, EDUCACIÓN CONTINUA, ETC)
     # ────────────────────────────────────────────────
     rubros = []
-    
-    # Intentamos encontrar el título de la sección deseada
-    seccion_encontrada = None
-    posibles_titulos = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'strong', 'p', 'span'])
-    
-    for elem in posibles_titulos:
-        texto = elem.get_text(strip=True).upper()
-        if any(palabra in texto for palabra in ["RUBROS UNEMI", "MAESTRIAS", "EDUCACION CONTINUA", "POSGRADOS", "CERTIFICADO ACAD"]):
-            seccion_encontrada = elem
-            break
-    
-    tabla = None
-    if seccion_encontrada:
-        # Buscamos la siguiente tabla después del título
-        tabla = seccion_encontrada.find_next("table", class_="table-bordered")
-    
-    # Si no encontramos por título → fallback: segunda tabla bordered
-    if not tabla:
-        tablas = soup.find_all("table", class_="table-bordered")
+
+    # Buscar el <th> que contenga el título deseado (dentro de cualquier texto descendiente)
+    th_titulo = soup.find('th', lambda tag: tag and 'RUBROS UNEMI' in tag.get_text(separator=' ', strip=True).upper())
+
+    if th_titulo:
+        # Subimos al card padre (el contenedor principal de esa sección)
+        card = th_titulo.find_parent('div', class_='card')
+        if card:
+            # Dentro del card, buscamos la tabla bordered/striped
+            tabla = card.find('table', class_='table-bordered')
+            if tabla:
+                # Extraemos filas del tbody (o directamente tr si no hay tbody)
+                filas = tabla.find('tbody')
+                if filas:
+                    filas = filas.find_all('tr')
+                else:
+                    filas = tabla.find_all('tr')
+
+                for fila in filas:
+                    celdas = fila.find_all('td')
+                    if len(celdas) < 7:  # mínimo para tener las columnas clave
+                        continue
+
+                    rubros.append({
+                        "codigo": celdas[0].get_text(strip=True),               # P[1601055] o similar
+                        "rubro": celdas[1].get_text(strip=True),
+                        "mes": celdas[2].get_text(strip=True),
+                        "fecha_vencimiento": celdas[3].get_text(strip=True),
+                        "valor_total": celdas[4].get_text(strip=True),
+                        "total_pagado": celdas[5].get_text(strip=True),
+                        "total_pendiente": celdas[6].get_text(strip=True),
+                        # Si quieres la factura link o algo, puedes extraer celdas[7] pero es más complejo (onclick)
+                    })
+
+    # Opcional: fallback si por alguna razón no encuentra el título (rara vez necesario)
+    if not rubros:
+        tablas = soup.find_all('table', class_='table-bordered')
         if len(tablas) >= 2:
-            tabla = tablas[1]  # asumimos: 0 = Jornadas, 1 = Rubros UNEMI
-    
+            # Si la primera es Jornadas → toma la segunda
+            tabla = tablas[1]
+            
     if tabla:
         # Tomamos todas las filas (con o sin tbody)
         filas = tabla.select("tbody tr") or tabla.select("tr")
